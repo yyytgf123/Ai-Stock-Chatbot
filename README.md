@@ -1,4 +1,4 @@
-<h1>💼 Capstone Project</h1>
+<h1>💼 Ai-Stock-Chatbot</h1>
 
 <!-- 프로젝트 대표 이미지 -->
 <img width="1230" height="581" alt="캡스톤사진" src="https://github.com/user-attachments/assets/d02fba82-e4c4-4a5b-999f-705890f6d01a" />
@@ -7,7 +7,7 @@
 <br>
 
 <h2>📘 Notion Page</h2>
-<h3><a href="https://sable-mars-102.notion.site/Capstone-1b2cb42f28df80158e69c3b250f5bbbe?pvs=4" target="_blank">Capstone Project Notion</a></h3>
+<h3><a href="https://sable-mars-102.notion.site/Capstone-1b2cb42f28df80158e69c3b250f5bbbe?pvs=4" target="_blank">Project Notion</a></h3>
 <br>
 
 
