@@ -1,14 +1,18 @@
+import requests
 from bs4 import BeautifulSoup
-from flask import Flask
-import urllib
-import boto3
-import os
 
-def get_urls(target_url):
-    html = urllib.request.urlopen(target_url).read()
-    soup = BeautifulSoup(html, 'html.parser')    
-    return soup
+def get_news(keyword="경제"):
+    url = f"https://news.google.com/rss/search?q={keyword}&hl=ko&gl=KR&ceid=KR:ko"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    resp = requests.get(url, headers=headers, timeout=10)
+    soup = BeautifulSoup(resp.text, "xml")
 
-def extract_Data(soup):
-    table = soup.find_all('div', 'article_view')
-    return table
+    articles = []
+    for item in soup.find_all("item")[:10]:
+        articles.append({
+            "title": item.title.text,
+            "link": item.link.text,
+            "source": item.source.text if item.source else "",
+            "date": item.pubDate.text
+        })
+    return articles

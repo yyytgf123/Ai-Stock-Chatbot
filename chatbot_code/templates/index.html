@@ -4,629 +4,602 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Stock Chatbot</title>
-    <script src="https://kit.fontawesome.com/a076d05399.js" crossorigin="anonymous"></script> <!-- FontAwesome 아이콘 -->
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script> <!-- Plotly.js -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet" />
     <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
-        /*CSS*/
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --bg-primary: #f1f5f9;
+            --bg-secondary: #e2e8f0;
+            --bg-card: #ffffff;
+            --bg-elevated: #f8fafc;
+            --border: #e2e8f0;
+            --text-primary: #1e293b;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.1);
+            --green: #16a34a;
+            --red: #dc2626;
+            --chat-user: #3b82f6;
+            --chat-bot: #e8edf4;
         }
 
         body {
-            font-family: 'Pretendard', 'Noto Sans KR', sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            font-family: 'Pretendard', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
             height: 100vh;
-            background-color: #1e293b;
-            margin: 0;
-            color: #f9fafb;
+            overflow: hidden;
         }
 
+        /* ── 전체 레이아웃 ── */
         #container {
-            width: 98%;
-            height: 98vh;
-            margin: auto;
-            padding: 10px;
-            border: 1px solid #000000;
             display: flex;
             flex-direction: column;
-            position: relative;
-            background-color: #1e293b;
+            height: 100vh;
+            padding: 12px;
+            gap: 10px;
         }
 
-        /* 헤더 */
+        /* ── 헤더 ── */
         #header {
-            background-color: #111827; 
-            color: #f9fafb; 
-            padding: 20px;
-            margin-bottom: 10px;
-            border-radius: 10px; 
-            text-align: center;
-            font-size: 24px;
-            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 14px 24px;
+            background: linear-gradient(135deg, #1e293b, #334155);
+            border: 1px solid var(--border);
+            border-radius: 12px;
             position: relative;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-        }
-
-        /* 상단 뉴스 바 */
-        #news-bar {
-            background: #374151;
-            padding: 10px 15px;
-            border-radius: 8px;
-            margin-bottom: 10px;
-            font-size: 16px;
-            text-align: center;
-            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
-            white-space: nowrap;
             overflow: hidden;
-            text-overflow: ellipsis;
         }
+        #header::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+        }
+        #header h1 {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            color: #f9fafb;
+        }
+        #header h1 span { color: var(--accent); }
 
+        /* ── 뉴스 바 ── */
+        #news-bar {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 16px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        #news-bar marquee { display: block; }
+        #news-text a {
+            color: var(--text-primary);
+            text-decoration: none;
+            margin-right: 16px;
+            transition: color 0.2s;
+            font-weight: 500;
+        }
+        #news-text a:hover { color: var(--accent); }
+
+        /* ── 메인 영역 ── */
         #main {
             flex: 1;
             display: flex;
-            overflow: hidden;
+            gap: 10px;
             min-height: 0;
         }
 
-        /* 왼쪽 주식 차트 공간 */
+        /* ── 차트 영역 ── */
         #content {
-            display: flex;
-            flex-direction: column;
             flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
             overflow: hidden;
-            padding: 20px;
-            border: 1px solid #000000;
         }
 
-        /* 오른쪽 챗봇 공간 */
+        /* 차트 컨트롤 */
+        #chart-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border);
+            flex-wrap: nowrap;
+            overflow-x: auto;
+        }
+
+        .search-group {
+            display: flex;
+            gap: 6px;
+        }
+        .search-group input {
+            height: 34px;
+            padding: 0 12px;
+            font-size: 13px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+            outline: none;
+            width: 140px;
+            transition: border-color 0.2s;
+        }
+        .search-group input:focus { border-color: var(--accent); }
+        .search-group button,
+        .tab-btn {
+            height: 34px;
+            padding: 0 14px;
+            font-size: 13px;
+            font-weight: 600;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg-elevated);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .search-group button:hover,
+        .tab-btn:hover {
+            background: var(--border);
+            color: var(--text-primary);
+        }
+        .tab-btn.active {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+
+        .tab-group { display: flex; gap: 4px; }
+
+        /* 자산 표시 */
+        .asset-bar {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-left: auto;
+            white-space: nowrap;
+        }
+        .asset-bar .label { color: var(--text-muted); margin-right: 4px; }
+        .asset-bar .value { color: var(--text-primary); font-weight: 600; }
+
+        /* 차트 */
+        #stockChart {
+            flex: 1;
+            min-height: 0;
+        }
+
+        /* ── 챗봇 ── */
         #sidebar {
-            width: 25%;
-            height: 100%;
-            border: 1px solid #000000;
+            width: 340px;
+            min-width: 300px;
             display: flex;
             flex-direction: column;
-        }
-
-        /* 챗봇 디자인 */
-        .chat-container {
-            width: 100%;
-            height: 100%;
-            background:#f9fafb;
-            display: flex;
-            flex-direction: column;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
         }
 
         .chat-header {
-            background: #111827;
+            padding: 14px 18px;
+            font-size: 15px;
+            font-weight: 700;
             color: #f9fafb;
-            padding: 10px;
-            text-align: center;
-            font-size: 18px;
-            font-weight: bold;
+            background: #1e293b;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .chat-header::before {
+            content: '';
+            width: 8px; height: 8px;
+            background: var(--green);
+            border-radius: 50%;
+            box-shadow: 0 0 6px var(--green);
         }
 
         .chat-box {
             flex: 1;
-            height: 300px;
             overflow-y: auto;
-            padding: 10px;
+            padding: 14px;
             display: flex;
             flex-direction: column;
-            background: #f8f8f8;
-            border-bottom: 1px solid #ccc;
+            gap: 10px;
+            background: #ffffff;
+        }
+        .chat-box::-webkit-scrollbar { width: 5px; }
+        .chat-box::-webkit-scrollbar-track { background: transparent; }
+        .chat-box::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 10px;
         }
 
         .message {
-            padding: 8px 12px;
-            margin: 5px;
-            border-radius: 8px;
-            max-width: 90%;
+            padding: 10px 14px;
+            border-radius: 12px;
+            max-width: 88%;
+            font-size: 13.5px;
+            line-height: 1.6;
             word-wrap: break-word;
+            animation: msgIn 0.25s ease-out;
+        }
+        @keyframes msgIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
         .user {
             align-self: flex-end;
-            background-color: #2563eb;
-            color: white;
+            background: var(--chat-user);
+            color: #fff;
+            border-bottom-right-radius: 4px;
         }
 
         .bot {
             align-self: flex-start;
-            background-color: #d1d5db;
-            color: #111827; 
+            background: var(--chat-bot);
+            color: var(--text-primary);
+            border: 1px solid #d5dce6;
+            border-left: 3px solid var(--accent);
+            border-bottom-left-radius: 4px;
+        }
+
+        /* 봇 메시지 내부 마크다운 스타일 */
+        .bot h1, .bot h2, .bot h3 {
+            font-size: 14px;
+            font-weight: 700;
+            margin: 8px 0 4px;
+            color: var(--accent);
+        }
+        .bot h1:first-child, .bot h2:first-child, .bot h3:first-child { margin-top: 0; }
+        .bot p { margin: 4px 0; }
+        .bot ul, .bot ol { padding-left: 18px; margin: 4px 0; }
+        .bot li { margin: 2px 0; }
+        .bot strong { color: #2563eb; }
+        .bot code {
+            background: rgba(0,0,0,0.06);
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-size: 12.5px;
+        }
+        .bot hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 8px 0;
+        }
+        .bot a { color: var(--accent); }
+
+        /* 로딩 애니메이션 */
+        .loading-dots span {
+            display: inline-block;
+            width: 6px; height: 6px;
+            margin: 0 2px;
+            background: var(--text-muted);
+            border-radius: 50%;
+            animation: dotPulse 1.2s infinite ease-in-out;
+        }
+        .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes dotPulse {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+            40% { transform: scale(1); opacity: 1; }
         }
 
         .input-box {
             display: flex;
-            padding: 10px;
-            border-top: 1px solid #ccc;
-            background: white;
+            padding: 12px;
+            gap: 8px;
+            border-top: 1px solid var(--border);
+            background: var(--bg-card);
         }
-
         .input-box input {
             flex: 1;
-            padding: 8px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            font-size: 14px;
-            background-color: #111827;
-            color: #f9fafb;
+            height: 38px;
+            padding: 0 14px;
+            font-size: 13.5px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+            outline: none;
+            transition: border-color 0.2s;
         }
-
+        .input-box input:focus { border-color: var(--accent); }
         .input-box button {
-            padding: 8px 12px;
-            margin-left: 5px;
+            height: 38px;
+            padding: 0 18px;
+            font-size: 13.5px;
+            font-weight: 600;
             border: none;
-            background-color: #111827;
-            color: white;
-            border-radius: 5px;
+            border-radius: 10px;
+            background: var(--accent);
+            color: #fff;
             cursor: pointer;
-            font-size: 14px;
+            transition: background 0.2s;
         }
-        /*------------------- */
-
-        /* 주요자산 디자인 */
-       
-        /*------------------- */
-
-        /* 한줄 뉴스 디자인 */
-        #news-text a {
-            margin-right: 20px;
-            padding-right: 10px;
-            text-decoration: none;
-            color: white;
-        }
-
-        /* 실시간 차트 디자인 */
-        #stockChart {
-            flex: 1;
-            height: 100%;
-            min-height: 300px;
-           
-        }
-
-        /* 주가 차트 스위치 */
-        #tabs {
-            margin-bottom: 10px;
-        }
-        #tabs button {
-            height: 32px;
-            line-height: 20px;
-            padding: 6px 12px;
-            margin: 0;
-            border-radius: 5px;
-            border: 1px solid #475569;
-            background-color: #334155;
-            color: #f9fafb;
-            cursor: pointer;
-            position: relative;
-            top: 0;
-        }
-
-        #tabs button:hover {
-            background-color: #475569;
-        }
-
-        #tabs button.active {
-            background-color: #64748b;
-            color: #ffffff;
-            border-color: #64748b;
-        }
-
-
+        .input-box button:hover { background: #2563eb; }
     </style>
-        <!-- HTML -->
-    </head>
-    <body>
-        <div id="container">
-        <div id="header">AWS 기반 주식 챗봇</div>
+</head>
+<body>
+    <div id="container">
+        <!-- 헤더 -->
+        <div id="header">
+            <h1><span>Stock</span> Chatbot</h1>
+        </div>
 
-        <!-- 한줄 뉴스 -->
-         <div id="news-bar">
-            <marquee behavior="scroll" direction="left"> <!-- 왼쪽으로 흐르게 -->
-            <span id="news-text">뉴스 데이터를 불러오는 중...</span>
+        <!-- 뉴스 바 -->
+        <div id="news-bar">
+            <marquee behavior="scroll" direction="left" scrollamount="4">
+                <span id="news-text">뉴스 데이터를 불러오는 중...</span>
             </marquee>
-        </div>    
+        </div>
+
+        <!-- 메인 -->
         <div id="main">
-        <div id="content">
-         <!-- 주식 차트 -->
-        <div id="chart-controls" style="display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; overflow-x: auto; padding-right: 10px;">
-        
-        <!-- 검색창 + 버튼 -->
-        <div style="display: flex; gap: 8px; align-items: center; position: relative; top: -4px;">
-        <input type="text" id="symbolInput" placeholder="종목명 입력"
-                style="height: 36px; line-height: 36px; padding: 0 14px; font-size: 14px;
-                        border-radius: 5px; border: 1px solid #ccc; background-color: #fff; color: #111827;">
-        <button onclick="updateChart()"
-                style="height: 36px; line-height: 36px; padding: 0 14px; font-size: 14px;
-                        border-radius: 5px; background-color: #334155;
-                        color: white; border: none; cursor: pointer;"> 검색
-        </button>
-        </div>
-        <!-- 탭 버튼 + 주요자산 -->
-        <div style="display: flex; align-items: center; gap: 20px;">
-            <div id="tabs" style="display: flex; gap: 6px;">
-        <button onclick="switchChart('1d', '1m')" class="active" id="tab-minute"
-                style="height: 32px; line-height: 30px; padding: 0 10px;
-                        font-size: 13px; border-radius: 5px;
-                        background-color: #64748b; color: white;
-                        border: 1px solid #475569;">
-            1m
-        </button>
-        <button onclick="switchChart('6mo', '1d')" id="tab-day"
-                style="height: 32px; line-height: 30px; padding: 0 10px;
-                        font-size: 13px; border-radius: 5px;
-                        background-color: #334155; color: white;
-                        border: 1px solid #475569;">
-            1d
-        </button>
-        </div>
-
-        <!-- 주요 자산 -->
-        <div id="mini-assets" style="font-size: 16px; font-weight: 600; color: #f9fafb; display: flex; gap: 28px; align-items: center;  position: relative;
-        top: -4px; margin-left: 40px; min-width: 480px; white-space: nowrap;">
-        <span>금: <span style="margin-left: 6px;" id="gold-price">-</span></span>
-        <span>은: <span style="margin-left: 6px;"id="silver-price">-</span></span>
-        <span>원유: <span style="margin-left: 6px;" id="oil-price">-</span></span>
-        <span>비트코인: <span style="margin-left: 6px;" id="bitcoin-price">-</span></span>
-        <span>달러: <span style="margin-left: 6px;" id="exchange-rate">-</span></span>
-        </div>
-    </div>
-</div>
-
-                <div id="stockChart"></div> <!-- Plotly 차트 -->
-            </div>
-             <!-- 챗봇 -->
-            <div id="sidebar">
-                <div class="chat-container">
-                    <div class="chat-header">Stock Chatbot</div>
-                    <div id="chatBox" class="chat-box"></div>
-                    <div class="input-box">
-                        <input type="text" id="userInput" placeholder="질문을 입력하세요" onkeypress="if(event.key==='Enter') sendMessage()">
-                        <button onclick="sendMessage()">전송</button>
+            <!-- 차트 영역 -->
+            <div id="content">
+                <div id="chart-controls">
+                    <div class="search-group">
+                        <input type="text" id="symbolInput" placeholder="종목명 입력">
+                        <button onclick="updateChart()">검색</button>
                     </div>
+                    <div class="tab-group">
+                        <button class="tab-btn active" id="tab-minute" onclick="switchChart('1d','1m')">1분</button>
+                        <button class="tab-btn" id="tab-day" onclick="switchChart('6mo','1d')">일봉</button>
+                    </div>
+                    <div class="asset-bar">
+                        <span><span class="label">금</span><span class="value" id="gold-price">-</span></span>
+                        <span><span class="label">은</span><span class="value" id="silver-price">-</span></span>
+                        <span><span class="label">원유</span><span class="value" id="oil-price">-</span></span>
+                        <span><span class="label">BTC</span><span class="value" id="bitcoin-price">-</span></span>
+                        <span><span class="label">USD</span><span class="value" id="exchange-rate">-</span></span>
+                    </div>
+                </div>
+                <div id="stockChart"></div>
+            </div>
+
+            <!-- 챗봇 -->
+            <div id="sidebar">
+                <div class="chat-header">Stock Chatbot</div>
+                <div id="chatBox" class="chat-box"></div>
+                <div class="input-box">
+                    <input type="text" id="userInput" placeholder="질문을 입력하세요" onkeypress="if(event.key==='Enter') sendMessage()">
+                    <button onclick="sendMessage()">전송</button>
                 </div>
             </div>
         </div>
-       
+    </div>
 
-    
-    <script>
-        
-        // JavaScript //
+<script>
+    // ── marked.js 설정 ──
+    marked.setOptions({ breaks: true, gfm: true });
 
-        // 주요자산
-            async function updateAssetPrices() {
-            try {
-                const response = await fetch("/get_asset_prices");
-                const data = await response.json();
-
+    // ── 주요 자산 ──
+    async function updateAssetPrices() {
+        try {
+            const response = await fetch("/get_asset_prices");
+            const data = await response.json();
             if (!data.error) {
-                document.getElementById("gold-price").textContent = data.gold_krw + " 원";
-                document.getElementById("silver-price").textContent = data.silver_krw + " 원";
-                document.getElementById("oil-price").textContent = data.oil_krw + " 원";
-                document.getElementById("bitcoin-price").textContent = data.bitcoin_krw + " 원";
-                document.getElementById("exchange-rate").textContent = data.exchange_rate + " 원/달러"; // 달러 대비
-            } else {
-                console.error("데이터 로드 실패:", data.error);
+                document.getElementById("gold-price").textContent = data.gold_krw + "원";
+                document.getElementById("silver-price").textContent = data.silver_krw + "원";
+                document.getElementById("oil-price").textContent = data.oil_krw + "원";
+                document.getElementById("bitcoin-price").textContent = data.bitcoin_krw + "원";
+                document.getElementById("exchange-rate").textContent = data.exchange_rate + "원";
             }
-            } catch (error) {
-                console.error("API 요청 오류:", error);
-            }
+        } catch (e) { console.error("자산 로드 실패:", e); }
+    }
+    setInterval(updateAssetPrices, 10000);
+    updateAssetPrices();
+
+    // ── 챗봇 ──
+    async function sendMessage() {
+        const userMessage = document.getElementById("userInput").value;
+        const chatBox = document.getElementById("chatBox");
+        if (userMessage.trim() === "") return;
+
+        // 유저 메시지
+        const userBubble = document.createElement("div");
+        userBubble.classList.add("message", "user");
+        userBubble.textContent = userMessage;
+        chatBox.appendChild(userBubble);
+        document.getElementById("userInput").value = "";
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        // 로딩 표시
+        const botBubble = document.createElement("div");
+        botBubble.classList.add("message", "bot");
+        botBubble.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div>';
+        chatBox.appendChild(botBubble);
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        try {
+            const response = await fetch("/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: userMessage })
+            });
+            const data = await response.json();
+            // 마크다운 → HTML 변환
+            botBubble.innerHTML = marked.parse(data.response);
+        } catch (error) {
+            botBubble.innerHTML = '<span style="color:#f87171;">오류가 발생했습니다. 다시 시도해주세요.</span>';
+        }
+        chatBox.scrollTop = chatBox.scrollHeight;
     }
 
-            setInterval(updateAssetPrices, 10000);
-            updateAssetPrices();
-
-
-        // 챗봇 응답
-            async function sendMessage() {
-            const userMessage = document.getElementById("userInput").value;
-            const chatBox = document.getElementById("chatBox");
-            if (userMessage.trim() === "") return;
-
-            const userBubble = document.createElement("div");
-            userBubble.classList.add("message", "user");
-            userBubble.textContent = userMessage;
-            chatBox.appendChild(userBubble);
-            document.getElementById("userInput").value = "";
-            chatBox.scrollTop = chatBox.scrollHeight;
-
-            const botBubble = document.createElement("div");
-            botBubble.classList.add("message", "bot");
-            botBubble.textContent = "응답을 기다리는 중...";
-            chatBox.appendChild(botBubble);
-            chatBox.scrollTop = chatBox.scrollHeight;
-
-            try {
-                const response = await fetch("/chat", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ message: userMessage })
-                });
-
-                const data = await response.json();
-                botBubble.textContent = data.response;
-            } catch (error) {
-                botBubble.textContent = "오류 발생. 다시 시도해주세요.";
-            }
-
-            chatBox.scrollTop = chatBox.scrollHeight;
-        }
-
-        // 한줄 뉴스
-            async function updateNewsBar() {
-            try {
+    // ── 한줄 뉴스 ──
+    async function updateNewsBar() {
+        try {
             const response = await fetch("/get_news");
             const news = await response.json();
-
             if (news.length > 0) {
-                let newsHTML = "";
-                for (let i = 0; i < news.length; i++) {
-                    newsHTML += `<a href="${news[i].link}" target="_blank">${news[i].title}</a> &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp; `;
-                    }
-
-                document.getElementById("news-text").innerHTML = newsHTML; // 화면 출력
-                } else {
+                document.getElementById("news-text").innerHTML = news
+                    .map(n => `<a href="${n.link}" target="_blank">${n.title}</a>`)
+                    .join(' &nbsp;│&nbsp; ');
+            } else {
                 document.getElementById("news-text").textContent = "현재 가져올 수 있는 뉴스가 없습니다.";
-                }
-                } catch (error) {
-                console.error("뉴스 업데이트 오류:", error);
-                document.getElementById("news-text").textContent = "뉴스 로드 실패";
-                }
+            }
+        } catch (e) {
+            document.getElementById("news-text").textContent = "뉴스 로드 실패";
         }
-        
+    }
+    setInterval(updateNewsBar, 10000);
+    updateNewsBar();
 
-            setInterval(updateNewsBar, 10000);
-            updateNewsBar();
+    // ── 차트 ──
+    function switchChart(period, interval) {
+        currentPeriod = period;
+        currentInterval = interval;
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        if (interval === '1m') document.getElementById("tab-minute").classList.add("active");
+        else document.getElementById("tab-day").classList.add("active");
+        updateChart();
+    }
 
-        //--------- 주식 그래프-----------//
-
-        // 탭 전환용 
-            function switchChart(period, interval) {
-                currentPeriod = period;
-                currentInterval = interval;
-                document.getElementById("tab-minute").classList.remove("active");
-                document.getElementById("tab-day").classList.remove("active");
-                if (interval === '1m') {
-                    document.getElementById("tab-minute").classList.add("active");
-                } else {
-                    document.getElementById("tab-day").classList.add("active");
-                }
-                updateChart();
+    function calculateSMA(data, period) {
+        const sma = [];
+        for (let i = 0; i < data.length; i++) {
+            if (i < period - 1) { sma.push(null); }
+            else {
+                const slice = data.slice(i - period + 1, i + 1);
+                sma.push(slice.reduce((a, b) => a + b, 0) / period);
             }
+        }
+        return sma;
+    }
 
-        // 이동 평균성 계산
-            function calculateSMA(data, period) {
-                const sma = [];
-                for (let i = 0; i < data.length; i++) {
-                    if (i < period - 1) {
-                    sma.push(null); // 초기에는 평균 없음
-                    } else {
-                    const slice = data.slice(i - period + 1, i + 1);
-                    const sum = slice.reduce((a, b) => a + b, 0);
-                    sma.push(sum / period);
-                    }
-                }
-                return sma;
-            }
+    let currentPeriod = '1d';
+    let currentInterval = '1m';
+    let currentLayout = null;
+    let currentSymbol = null;
+    let previousPeriod = currentPeriod;
+    let previousInterval = currentInterval;
+    let previousTraces = [];
 
-        // 기본 차트 설정값
-        let currentPeriod = '1d';
-        let currentInterval = '1m';
+    async function fetchStockData(symbol, period, interval) {
+        try {
+            const response = await fetch(`/get_stock_data?symbol=${symbol}&period=${period}&interval=${interval}`);
+            const data = await response.json();
+            if (data.error) { alert(data.error); return null; }
+            return data;
+        } catch (e) { console.error("주가 데이터 로드 실패:", e); return null; }
+    }
 
-        // 주가 데이터 받아옴
-        async function fetchStockData(symbol, period, interval) {
-            try {
-                const response = await fetch(`/get_stock_data?symbol=${symbol}&period=${period}&interval=${interval}`);
-                const data = await response.json();
-                if (data.error) {
-                    alert(data.error);
-                    return null;
-                }
-                    return data;
-                } catch (error) {
-                    console.error("주가 데이터 로드 실패:", error);
-                    return null;
-                }
+    async function updateChart() {
+        const rawInput = document.getElementById("symbolInput").value.trim();
+        const symbolRes = await fetch(`/resolve_symbol?name=${encodeURIComponent(rawInput || "AAPL")}`);
+        const { symbol, name: companyName } = await symbolRes.json();
+        const data = await fetchStockData(symbol, currentPeriod, currentInterval);
+        if (!data) return;
+
+        const isSameSymbol = (symbol === currentSymbol);
+        const isSamePeriod = (currentPeriod === previousPeriod);
+        const isSameInterval = (currentInterval === previousInterval);
+        const shouldPreserveZoom = isSameSymbol && isSamePeriod && isSameInterval;
+        previousPeriod = currentPeriod;
+        previousInterval = currentInterval;
+        currentSymbol = symbol;
+
+        const traceCandle = {
+            x: data.dates, open: data.opens, high: data.highs,
+            low: data.lows, close: data.closes,
+            type: 'candlestick', name: '캔들차트',
+            increasing: { line: { color: '#22c55e' } },
+            decreasing: { line: { color: '#ef4444' } },
+            xaxis: 'x', yaxis: 'y'
+        };
+        const tracePrice = {
+            x: data.dates, y: data.prices, mode: "lines",
+            name: '종가', line: { color: "#3b82f6", width: 1.5 },
+            xaxis: 'x', yaxis: 'y'
+        };
+        const sma5 = calculateSMA(data.prices, 5);
+        const sma20 = calculateSMA(data.prices, 20);
+        const traceSMA5 = {
+            x: data.dates, y: sma5, mode: "lines",
+            name: "MA5", line: { color: "#f59e0b", dash: "dot", width: 1 },
+            xaxis: 'x', yaxis: 'y'
+        };
+        const traceSMA20 = {
+            x: data.dates, y: sma20, mode: "lines",
+            name: "MA20", line: { color: "#a78bfa", dash: "dashdot", width: 1 },
+            xaxis: 'x', yaxis: 'y'
+        };
+        const traceVolume = {
+            x: data.dates, y: data.volumes, type: 'bar',
+            name: '거래량', marker: { color: 'rgba(59,130,246,0.35)' },
+            xaxis: 'x2', yaxis: 'y2'
+        };
+
+        const layout = {
+            dragmode: "pan",
+            title: {
+                text: `${companyName || symbol} (${symbol})`,
+                font: { size: 18, family: "Pretendard, sans-serif", color: "#1e293b" },
+                x: 0.5, xanchor: 'center'
+            },
+            plot_bgcolor: '#ffffff',
+            paper_bgcolor: '#ffffff',
+            font: { color: '#475569', size: 11 },
+            grid: { rows: 2, columns: 1, subplots: [['xy'], ['x2y2']], roworder: 'top to bottom' },
+            xaxis: {
+                gridcolor: "#e2e8f0", zerolinecolor: "#e2e8f0",
+                rangeslider: { visible: false }, fixedrange: false,
+                ...(shouldPreserveZoom && currentLayout?.xaxis?.range ? { range: currentLayout.xaxis.range } : {})
+            },
+            yaxis: {
+                domain: [0.32, 1], gridcolor: "#e2e8f0",
+                zerolinecolor: "#e2e8f0", automargin: true, fixedrange: false,
+                ...(shouldPreserveZoom && currentLayout?.yaxis?.range ? { range: currentLayout.yaxis.range } : {})
+            },
+            xaxis2: { gridcolor: "#e2e8f0", zerolinecolor: "#e2e8f0" },
+            yaxis2: { domain: [0, 0.22], gridcolor: "#e2e8f0", zerolinecolor: "#e2e8f0", automargin: true },
+            legend: {
+                x: 1, y: 1.12, xanchor: "right", yanchor: "bottom",
+                orientation: "h", font: { size: 11, color: "#475569" },
+                bgcolor: "transparent"
+            },
+            margin: { t: 50, r: 40, b: 40, l: 50 }
+        };
+
+        const config = { displayModeBar: false, responsive: true, scrollZoom: true };
+
+        if (previousTraces.length === 5) {
+            traceCandle.visible = previousTraces[0].visible;
+            tracePrice.visible = previousTraces[1].visible;
+            traceSMA5.visible = previousTraces[2].visible;
+            traceSMA20.visible = previousTraces[3].visible;
+            traceVolume.visible = previousTraces[4].visible;
         }
 
-         // 검색 심볼 변환해서 
-         async function resolveCompanySymbol(name) {
-                const response = await fetch(`/resolve_symbol?name=${encodeURIComponent(name)}`);
-                const data = await response.json();
-                return data.symbol || name;
-            }
-        
-         // 실시간 차트 생성
-            let currentLayout = null;
-            let currentSymbol = null;
-            let previousPeriod = currentPeriod;
-            let previousInterval = currentInterval;
-            let previousTraces = [];
-            
-            async function updateChart() {
-                const rawInput = document.getElementById("symbolInput").value.trim();
-                const symbolRes = await fetch(`/resolve_symbol?name=${encodeURIComponent(rawInput || "AAPL")}`);
-                const { symbol, name: companyName } = await symbolRes.json();
+        Plotly.react("stockChart", [traceCandle, tracePrice, traceSMA5, traceSMA20, traceVolume], layout, config).then(() => {
+            previousTraces = [traceCandle, tracePrice, traceSMA5, traceSMA20, traceVolume].map(t => ({ visible: t.visible }));
+            currentLayout = layout;
+            document.getElementById("stockChart").on('plotly_restyle', function() {
+                previousTraces = document.getElementById("stockChart").data.map(t => ({ visible: t.visible }));
+            });
+        });
+    }
 
-                const data = await fetchStockData(symbol, currentPeriod, currentInterval);
-                if (!data) return;
-
-                const isSameSymbol = (symbol === currentSymbol);  // 동일한 종목인지 확인
-                const isSamePeriod = (currentPeriod === previousPeriod);
-                const isSameInterval = (currentInterval === previousInterval);
-                
-                const shouldPreserveZoom = isSameSymbol && isSamePeriod && isSameInterval;
-
-                previousPeriod = currentPeriod;
-                previousInterval = currentInterval;
-                currentSymbol = symbol;
-
-
-                const traceCandle = {
-                    x: data.dates,
-                    open: data.opens,
-                    high: data.highs,
-                    low: data.lows,
-                    close: data.closes,
-                    type: 'candlestick',
-                    name: `${symbol} 캔들차트`,
-                    increasing: { line: { color: '#17c964' } },
-                    decreasing: { line: { color: '#f31260' } },
-                    xaxis: 'x',
-                    yaxis: 'y'
-                };
-
-                const tracePrice = {
-                    x: data.dates,
-                    y: data.prices,
-                    mode: "lines",
-                    name: `${symbol} 종가`,
-                    line: { color: "#007bff" },
-                    xaxis: 'x',
-                    yaxis: 'y'
-                };
-
-                const sma5 = calculateSMA(data.prices, 5);
-                const sma20 = calculateSMA(data.prices, 20);
-
-                const traceSMA5 = {
-                    x: data.dates,
-                    y: sma5,
-                    mode: "lines",
-                    name: "5일 이동평균선",
-                    line: { dash: "dot" },
-                    xaxis: 'x',
-                    yaxis: 'y'
-                };
-
-                const traceSMA20 = {
-                    x: data.dates,
-                    y: sma20,
-                    mode: "lines",
-                    name: "20일 이동평균선",
-                    line: { dash: "dashdot" },
-                    xaxis: 'x',
-                    yaxis: 'y'
-                };
-
-                const traceVolume = {
-                    x: data.dates,
-                    y: data.volumes,
-                    type: 'bar',
-                    name: '거래량',
-                    marker: { color: '#94a3b8' },
-                    xaxis: 'x2',
-                    yaxis: 'y2'
-                };
-
-                const layout = {
-                    dragmode: "pan",
-                    title: {
-                        text: `${companyName} (${symbol})`,
-                        font: {
-                            size: 28,
-                            family: "Pretendard, 'Noto Sans KR', sans-serif",
-                            color: "#1f2937"
-                        },
-                        x: 0.5,
-                        xanchor: 'center'
-                    },
-                    plot_bgcolor: '#f9fafb',
-                    paper_bgcolor: '#f9fafb',
-                    font: { color: '#111827' },
-                    grid: { rows: 2, columns: 1, subplots: [['xy'], ['x2y2']], roworder: 'top to bottom' },
-                    xaxis: {
-                        title: "",
-                        gridcolor: "#d1d5db",
-                        zerolinecolor: "#d1d5db",
-                        rangeslider: { visible: false },
-                        fixedrange: false,
-                        ...(shouldPreserveZoom && currentLayout?.xaxis?.range ? { range: currentLayout.xaxis.range } : {})
-                    },
-                    yaxis: {
-                        domain: [0.35, 1],
-                        gridcolor: "#d1d5db",
-                        zerolinecolor: "#d1d5db",
-                        automargin: true,
-                        fixedrange: false,
-                        ...(shouldPreserveZoom && currentLayout?.yaxis?.range ? { range: currentLayout.yaxis.range } : {})
-                    },
-                    xaxis2: {
-                        title: "날짜",
-                        gridcolor: "#d1d5db",
-                        zerolinecolor: "#d1d5db"
-                    },
-                    yaxis2: {
-                        domain: [0, 0.25],
-                        title: '',
-                        gridcolor: "#d1d5db",
-                        zerolinecolor: "#d1d5db",
-                        automargin: true
-                    },
-                    annotations: [
-                        { x: -0.05, y: 0.8, xref: 'paper', yref: 'paper', text: '가격', showarrow: false, font: { size: 13 } },
-                        { x: 1.07, y: 0.05, xref: 'paper', yref: 'paper', text: '거래량', showarrow: false, font: { size: 13 } }
-                    ],
-                    legend: {
-                        x: 1,
-                        y: 1.15,
-                        xanchor: "right",
-                        yanchor: "bottom",
-                        orientation: "v",
-                        font: { size: 11 }
-                    },
-                    margin: {
-                        t: 40,
-                        r: 140
-                    }
-                };
-
-                const config = {
-                    displayModeBar: false,
-                    responsive: true,
-                    scrollZoom: true
-                };
-
-                if (previousTraces.length === 5) {
-                    traceCandle.visible = previousTraces[0].visible;
-                    tracePrice.visible = previousTraces[1].visible;
-                    traceSMA5.visible = previousTraces[2].visible;
-                    traceSMA20.visible = previousTraces[3].visible;
-                    traceVolume.visible = previousTraces[4].visible;
-                }
-
-
-                Plotly.react("stockChart", [traceCandle, tracePrice, traceSMA5, traceSMA20, traceVolume], layout, config).then(() => {
-                    // trace 표시 상태 기억
-                    previousTraces = [traceCandle, tracePrice, traceSMA5, traceSMA20, traceVolume].map(trace => ({
-                        visible: trace.visible
-                    }));
-
-                    // 줌 영역 기억
-                    currentLayout = layout;
-
-                    const chartDiv = document.getElementById("stockChart");
-                    chartDiv.on('plotly_restyle', function(eventData) {
-                        const currentTraces = chartDiv.data;
-                        previousTraces = currentTraces.map(trace => ({
-                            visible: trace.visible
-                        }));
-                    });
-                })
-            }
-                setInterval(updateChart, 10000);
-                updateChart(); 
-//---------------------------------------------------------------------------------//
-
-    </script>
+    setInterval(updateChart, 10000);
+    updateChart();
+</script>
 </body>
 </html>
