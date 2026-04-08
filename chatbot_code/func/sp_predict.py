@@ -1,3 +1,15 @@
+"""
+v4 — 하이브리드(분류+회귀) + 캘리브레이션 + 대안 피처 + NLP 감성 (최종)
+
+변경점 (v3 대비):
+  - 모델: 회귀 앙상블 → 분류 앙상블(방향) + 회귀 앙상블(크기) 하이브리드
+  - 데이터: 2년 → 5년 (462건 → 1,200건)
+  - 피처: 22개 → 33개 (대안 6개 + NLP 감성 5개 추가)
+  - 확률: Isotonic Regression 캘리브레이션 + 동적 시그널
+  - NLP: 네이버 뉴스 크롤링 + KR-FinBert + 2단계 필터링
+  - 피처 선택: 중요도 기반 자동 선택
+  - 튜닝: Optuna 분류/회귀 각각 독립 탐색
+"""
 import xgboost as xgb
 import lightgbm as lgbm
 import yfinance as yf
@@ -18,16 +30,14 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.isotonic import IsotonicRegression
 from transformers import pipeline
 
-# Optuna 로그 억제
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# KR-FinBert 감성 분석기 (싱글톤)
+# [v4 추가] KR-FinBert 감성 분석기 (싱글톤)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 _sentiment_pipeline = None
 
 def get_sentiment_pipeline():
-    """KR-FinBert 모델 로드 (최초 1회만)"""
     global _sentiment_pipeline
     if _sentiment_pipeline is None:
         print("  [NLP] KR-FinBert 모델 로드 중... (최초 1회)")
@@ -42,12 +52,13 @@ def get_sentiment_pipeline():
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 네이버 뉴스 크롤링 + 캐싱
+# [v4 추가] 네이버 뉴스 크롤링 + 캐싱
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "news_cache")
 
 headers_naver = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
 
@@ -72,7 +83,6 @@ def _save_cache(stock_name, cache_data):
 
 
 def crawl_naver_news_week(query, start_date, end_date):
-    """네이버 뉴스 주 단위 크롤링 (셀렉터 다중 fallback)"""
     ds = start_date.replace("-", ".")
     de = end_date.replace("-", ".")
     nso_start = start_date.replace("-", "")
@@ -80,11 +90,8 @@ def crawl_naver_news_week(query, start_date, end_date):
 
     url = "https://search.naver.com/search.naver"
     params = {
-        "where": "news",
-        "query": query,
-        "sort": 1,
-        "ds": ds,
-        "de": de,
+        "where": "news", "query": query, "sort": 1,
+        "ds": ds, "de": de,
         "nso": f"so:dd,p:from{nso_start}to{nso_end}",
         "start": 1,
     }
@@ -95,7 +102,6 @@ def crawl_naver_news_week(query, start_date, end_date):
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
 
-            # 방법 1: 뉴스 그룹 내 블록에서 첫 번째 링크 = 제목
             news_blocks = soup.select('.group_news .sds-comps-full-layout')
             if news_blocks:
                 for block in news_blocks:
@@ -105,7 +111,6 @@ def crawl_naver_news_week(query, start_date, end_date):
                         if title and 10 < len(title) < 200:
                             titles.append(title)
 
-            # 방법 2: fallback — 구버전 셀렉터
             if not titles:
                 for sel in ['a.news_tit', '.news_tit']:
                     items = soup.select(sel)
@@ -116,7 +121,6 @@ def crawl_naver_news_week(query, start_date, end_date):
                                 titles.append(title)
                         break
 
-            # 방법 3: fallback — href에 뉴스 도메인 포함
             if not titles:
                 for a in soup.select('.group_news a'):
                     text = a.get_text(strip=True)
@@ -126,9 +130,7 @@ def crawl_naver_news_week(query, start_date, end_date):
                         if text not in titles:
                             titles.append(text)
 
-            # 중복 제거 후 최대 15개
             titles = list(dict.fromkeys(titles))[:15]
-
     except Exception:
         pass
 
@@ -136,7 +138,6 @@ def crawl_naver_news_week(query, start_date, end_date):
 
 
 def crawl_news_for_period(stock_name, start_date, end_date):
-    """주 단위로 뉴스 크롤링 + 캐싱"""
     cache = _load_cache(stock_name)
     new_data = False
 
@@ -153,16 +154,12 @@ def crawl_news_for_period(stock_name, start_date, end_date):
 
         if week_key not in cache:
             titles = crawl_naver_news_week(
-                stock_name,
-                current.strftime("%Y-%m-%d"),
-                week_end.strftime("%Y-%m-%d"),
+                stock_name, current.strftime("%Y-%m-%d"), week_end.strftime("%Y-%m-%d"),
             )
             cache[week_key] = titles
             new_data = True
             crawled_count += 1
-
             time.sleep(np.random.uniform(0.5, 1.0))
-
             if crawled_count % 50 == 0:
                 print(f"    크롤링 진행: {crawled_count}주 완료...")
         else:
@@ -175,51 +172,35 @@ def crawl_news_for_period(stock_name, start_date, end_date):
 
     print(f"  [크롤링] 신규: {crawled_count}주 | 캐시: {cached_count}주 | "
           f"총 뉴스: {sum(len(v) for v in cache.values())}건")
-
     return cache
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 감성 분석 + 2단계 필터링 + 피처 생성
+# [v4 추가] 감성 분석 + 2단계 필터링 + 피처 생성
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def analyze_sentiment_batch(titles, batch_size=32):
-    """KR-FinBert 배치 감성 분석"""
     if not titles:
         return []
-
     pipe = get_sentiment_pipeline()
     results = []
-
     for i in range(0, len(titles), batch_size):
         batch = titles[i:i + batch_size]
         try:
             batch_results = pipe(batch, truncation=True, max_length=128)
             for item in batch_results:
-                scores = {}
-                for label_info in item:
-                    label = label_info['label'].lower()
-                    scores[label] = label_info['score']
+                scores = {label_info['label'].lower(): label_info['score'] for label_info in item}
                 results.append(scores)
         except Exception:
             for _ in batch:
                 results.append({'positive': 0.33, 'negative': 0.33, 'neutral': 0.34})
-
     return results
 
 
 def build_sentiment_features(stock_name, date_index, start_date, end_date):
-    """
-    뉴스 감성 피처 생성 (2단계 필터링 적용)
-
-    1차 필터: 종목명 + 금융 키워드 → 관련 기사만 선별
-    2차 필터: 감성 강도 |score| > 0.3 → 뚜렷한 감성만 사용
-    """
     print(f"\n  [감성 분석] 뉴스 크롤링 시작...")
     news_cache = crawl_news_for_period(stock_name, start_date, end_date)
 
     print(f"  [감성 분석] 1차 필터 (키워드 관련성)...")
-
-    # 1차 필터: 키워드 관련성
     filtered_titles = []
     filtered_week_keys = []
     total_raw = 0
@@ -236,33 +217,27 @@ def build_sentiment_features(stock_name, date_index, start_date, end_date):
           f"(관련 기사 {len(filtered_titles)/max(total_raw,1):.0%})")
 
     if not filtered_titles:
-        print(f"  ⚠️ 관련 기사 0건 — 감성 피처 0으로 채움")
+        print(f"  관련 기사 0건 — 감성 피처 0으로 채움")
         sentiment_df = pd.DataFrame(index=date_index)
         for col in SENTIMENT_FEATURES:
             sentiment_df[col] = 0
         return sentiment_df
 
-    # KR-FinBert 감성 분석
     print(f"  [감성 분석] KR-FinBert 분석 중...")
     all_scores = analyze_sentiment_batch(filtered_titles)
 
-    # 2차 필터: 감성 강도
     print(f"  [감성 분석] 2차 필터 (감성 강도 > 0.3)...")
-    weekly_sentiment = {}
     week_scores = {}
     strong_count = 0
 
     for week_key, title, scores in zip(filtered_week_keys, filtered_titles, all_scores):
+        # 감성 강도 필터 (약한 감성 제거)
         sentiment = scores.get('positive', 0) - scores.get('negative', 0)
-
-        # 2차 필터: 감성 강도가 0.3 이상인 기사만 사용
         if abs(sentiment) < 0.3:
             continue
-
         strong_count += 1
         if week_key not in week_scores:
             week_scores[week_key] = []
-
         week_scores[week_key].append({
             'sentiment': sentiment,
             'is_positive': 1 if sentiment > 0.1 else 0,
@@ -271,7 +246,7 @@ def build_sentiment_features(stock_name, date_index, start_date, end_date):
     print(f"  [2차 필터] {len(filtered_titles)}건 → {strong_count}건 "
           f"(강한 감성 {strong_count/max(len(filtered_titles),1):.0%})")
 
-    # 주별 집계
+    weekly_sentiment = {}
     for week_key, scores_list in week_scores.items():
         sentiments = [s['sentiment'] for s in scores_list]
         positives = [s['is_positive'] for s in scores_list]
@@ -285,7 +260,6 @@ def build_sentiment_features(stock_name, date_index, start_date, end_date):
     print(f"  [감성 분석] 최종: {strong_count}건 사용 "
           f"({strong_count/max(total_raw,1):.0%} of 원본)")
 
-    # 주별 → 일별 변환
     sentiment_df = pd.DataFrame(index=date_index)
     sentiment_df['News_Sentiment'] = np.nan
     sentiment_df['News_Positive_Ratio'] = np.nan
@@ -301,67 +275,48 @@ def build_sentiment_features(stock_name, date_index, start_date, end_date):
         sentiment_df.loc[mask, 'News_Count'] = data['count']
         sentiment_df.loc[mask, 'News_Sentiment_Std'] = data['std']
 
-    sentiment_df = sentiment_df.ffill()
-    sentiment_df = sentiment_df.fillna(0)
-
+    sentiment_df = sentiment_df.ffill().fillna(0)
     sentiment_df['News_Momentum'] = (
         sentiment_df['News_Sentiment'].rolling(5).mean()
         - sentiment_df['News_Sentiment'].rolling(20).mean()
-    )
-    sentiment_df['News_Momentum'] = sentiment_df['News_Momentum'].fillna(0)
+    ).fillna(0)
 
     return sentiment_df
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 기존 코드 (v5 기반)
+# 종목 검색
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-headers_yf = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-}
+headers_yf = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
 def search(company_name):
     url = f"https://query1.finance.yahoo.com/v1/finance/search?q={company_name}"
     response = requests.get(url, headers=headers_yf, timeout=5)
     results = response.json().get("quotes", [])
-    if results:
-        return results[0]["symbol"]
-    return None
+    return results[0]["symbol"] if results else None
 
-def translate_to_english(translate):
-    return GoogleTranslator(source='ko', target='en').translate(translate)
+def translate_to_english(text):
+    return GoogleTranslator(source='ko', target='en').translate(text)
 
 def find_company_symbol(name):
-    name_list = name.split()
-    for name_li in name_list:
-        if not name_li.isascii():
-            name_li = translate_to_english(name_li)
-        symbol = search(name_li)
+    for word in name.split():
+        if not word.isascii():
+            word = translate_to_english(word)
+        symbol = search(word)
         if symbol:
             return symbol
     return None
 
-
 def get_korean_name(user_input):
-    """사용자 입력에서 한글 종목명 추출"""
     for word in user_input.split():
         if not word.isascii():
             return word
     return user_input
 
 
-# 섹터 매핑
-SECTOR_ETF_MAP = {
-    'Technology': 'XLK',
-    'Semiconductor': 'SOXX',
-    'Finance': 'XLF',
-    'Healthcare': 'XLV',
-    'Energy': 'XLE',
-    'Consumer': 'XLY',
-    'Industrial': 'XLI',
-    'default': 'SPY',
-}
-
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# [v4 추가] 섹터 매핑
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def guess_sector_etf(symbol):
     symbol_upper = symbol.upper()
     semi_keywords = ['005930', '000660', '042700']
@@ -385,80 +340,59 @@ def guess_sector_etf(symbol):
     try:
         info = yf.Ticker(symbol).info
         sector = info.get('sector', '')
-        if 'Technol' in sector:
-            return 'XLK'
-        elif 'Financ' in sector:
-            return 'XLF'
-        elif 'Health' in sector:
-            return 'XLV'
-        elif 'Energy' in sector:
-            return 'XLE'
-        elif 'Consumer' in sector:
-            return 'XLY'
+        if 'Technol' in sector: return 'XLK'
+        elif 'Financ' in sector: return 'XLF'
+        elif 'Health' in sector: return 'XLV'
+        elif 'Energy' in sector: return 'XLE'
+        elif 'Consumer' in sector: return 'XLY'
     except Exception:
         pass
     return 'SPY'
 
 
-### 피처 정의 ###
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 피처 정의 (v3: 22개 → v4: 33개)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TECH_FEATURES = [
     'MA20', 'RSI_14', 'MACD', 'Bollinger_%B', 'Vol_MA5', 'Pct_change',
     'ATR_14', 'Stochastic_%K', 'Stochastic_%D', 'OBV_change',
     'MACD_signal', 'MACD_hist', 'Lag_1', 'Lag_2', 'Lag_3',
 ]
-
-MACRO_FEATURES = [
-    'VIX', 'VIX_change', 'DXY_change', 'US10Y_change', 'SP500_change',
-]
-
+MACRO_FEATURES = ['VIX', 'VIX_change', 'DXY_change', 'US10Y_change', 'SP500_change']
+# [v4 추가]
 ALTERNATIVE_FEATURES = [
     'Sector_RelStr_5', 'Sector_RelStr_20',
     'Vol_Surprise', 'Spread_HighLow_20', 'Momentum_Cross', 'Gap_Return',
 ]
-
 SENTIMENT_FEATURES = [
-    'News_Sentiment',        # 평균 감성 (-1 ~ +1)
-    'News_Positive_Ratio',   # 긍정 뉴스 비율
-    'News_Count',            # 뉴스 건수 (관심도)
-    'News_Sentiment_Std',    # 감성 표준편차 (의견 분열)
-    'News_Momentum',         # 감성 추세 변화
+    'News_Sentiment', 'News_Positive_Ratio', 'News_Count',
+    'News_Sentiment_Std', 'News_Momentum',
 ]
+CALENDAR_FEATURES = ['DayOfWeek', 'Month']
 
-# 뉴스 관련성 필터 키워드 (금융/투자 관련)
 RELEVANT_KEYWORDS = [
-    # 실적/재무
     '실적', '매출', '영업이익', '순이익', '적자', '흑자', '어닝',
     '분기', '연간', '전망', '가이던스', '컨센서스',
-    # 주가/투자
     '주가', '목표가', '상향', '하향', '투자의견', '매수', '매도',
     '신고가', '신저가', '급등', '급락', '반등', '하락',
-    # 수급
     '외국인', '기관', '순매수', '순매도', '공매도', '대차',
-    # 사업/산업
-    '수주', '계약', '투자', '인수', '합병', '신사업', '양산',
-    '점유율', '출하', '가동률',
-    # 배당/주주
+    '수주', '계약', '투자', '인수', '합병', '신사업', '양산', '점유율', '출하', '가동률',
     '배당', '자사주', '주주환원',
-    # 반도체 산업 키워드
     '반도체', 'HBM', 'AI', '파운드리', 'DRAM', 'NAND', '메모리',
 ]
 
-
 def is_relevant_news(title, stock_name):
-    """1차 필터: 종목명 포함 + 금융 관련 키워드 존재 여부"""
     if stock_name not in title:
         return False
     return any(kw in title for kw in RELEVANT_KEYWORDS)
-
-
-CALENDAR_FEATURES = [
-    'DayOfWeek', 'Month',
-]
 
 ALL_FEATURES = (TECH_FEATURES + MACRO_FEATURES + ALTERNATIVE_FEATURES
                 + SENTIMENT_FEATURES + CALENDAR_FEATURES)
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 피처 계산
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def calculate_features(df):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
@@ -504,6 +438,7 @@ def calculate_features(df):
     df['Lag_2'] = df['Pct_change'].shift(2)
     df['Lag_3'] = df['Pct_change'].shift(3)
 
+    # [v4 추가] 대안 피처
     vol_ma20 = df['Volume'].rolling(20).mean()
     df['Vol_Surprise'] = df['Volume'] / vol_ma20
 
@@ -537,7 +472,7 @@ def add_sector_relative_strength(df, symbol, start_date, end_date):
         df['Sector_RelStr_5'] = stock_ret_5 - etf_ret_5.reindex(df.index).ffill()
         df['Sector_RelStr_20'] = stock_ret_20 - etf_ret_20.reindex(df.index).ffill()
     except Exception as e:
-        print(f"  ⚠️ 섹터 ETF 실패: {e}")
+        print(f"  섹터 ETF 실패: {e}")
         df['Sector_RelStr_5'] = 0
         df['Sector_RelStr_20'] = 0
     return df
@@ -581,7 +516,9 @@ def add_macro_features(df, macro_df):
     return df
 
 
-### 데이터 준비 ###
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 데이터 준비
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def stock_data(symbol, stock_name, years=5):
     today = datetime.today()
     start = today - relativedelta(years=years)
@@ -597,11 +534,9 @@ def stock_data(symbol, stock_name, years=5):
     macro_df = fetch_macro_data(start_str, end_str)
     df = add_macro_features(df, macro_df)
 
-    # ━━ 뉴스 감성 피처 추가 (최근 2년만) ━━
+    # NLP 감성 피처 (최근 2년만)
     news_start = (today - relativedelta(years=2)).strftime("%Y-%m-%d")
-    sentiment_df = build_sentiment_features(
-        stock_name, df.index, news_start, end_str
-    )
+    sentiment_df = build_sentiment_features(stock_name, df.index, news_start, end_str)
     for col in SENTIMENT_FEATURES:
         if col in sentiment_df.columns:
             df[col] = sentiment_df[col].reindex(df.index).ffill().fillna(0)
@@ -623,7 +558,6 @@ def stock_data(symbol, stock_name, years=5):
 def compare_data(symbol, stock_name, feature_list):
     df_pred = yf.download(symbol, period="60d", progress=False)
     df_pred = calculate_features(df_pred)
-
     if isinstance(df_pred.columns, pd.MultiIndex):
         df_pred.columns = df_pred.columns.droplevel(1)
 
@@ -631,14 +565,10 @@ def compare_data(symbol, stock_name, feature_list):
     start_date = (datetime.today() - relativedelta(days=90)).strftime("%Y-%m-%d")
 
     df_pred = add_sector_relative_strength(df_pred, symbol, start_date, end_date)
-
     macro_df = fetch_macro_data(start_date, end_date)
     df_pred = add_macro_features(df_pred, macro_df)
 
-    # 뉴스 감성 (최근)
-    sentiment_df = build_sentiment_features(
-        stock_name, df_pred.index, start_date, end_date
-    )
+    sentiment_df = build_sentiment_features(stock_name, df_pred.index, start_date, end_date)
     for col in SENTIMENT_FEATURES:
         if col in sentiment_df.columns:
             df_pred[col] = sentiment_df[col].reindex(df_pred.index).ffill().fillna(0)
@@ -646,14 +576,15 @@ def compare_data(symbol, stock_name, feature_list):
             df_pred[col] = 0
 
     df_pred.replace([np.inf, -np.inf], np.nan, inplace=True)
-
     last_close = float(df_pred['Close'].iloc[-1])
     features_row = df_pred[feature_list].iloc[-1:]
 
     return features_row, last_close
 
 
-### 피처 선택 ###
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# [v4 추가] 피처 선택
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def select_features_by_importance(X_train, y_train, X_test, y_test, threshold=0.015):
     temp_model = xgb.XGBClassifier(
         max_depth=3, learning_rate=0.01, n_estimators=300,
@@ -682,19 +613,20 @@ def select_features_by_importance(X_train, y_train, X_test, y_test, threshold=0.
             selected.append(best_sentiment)
             if best_sentiment in removed:
                 removed.remove(best_sentiment)
-            print(f"  감성 피처 강제 포함: {best_sentiment} (중요도: {best_imp:.4f})")
 
     print(f"  피처 선택: {len(X_train.columns)}개 → {len(selected)}개")
     print(f"  제거됨: {removed}")
-    print(f"  피처 중요도 Top 10:")
+    print(f"  Top 10:")
     for feat, imp in importance.head(10).items():
-        marker = " ★" if feat in SENTIMENT_FEATURES else ""
+        marker = " *" if feat in SENTIMENT_FEATURES else ""
         print(f"    {feat:>25s}: {imp:.4f}{marker}")
 
     return selected
 
 
-### Optuna ###
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# [v4 변경] Optuna — 분류/회귀 분리
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def optimize_classifier_params(X, y, n_splits=3, n_trials=50):
     tscv = TimeSeriesSplit(n_splits=n_splits)
 
@@ -710,9 +642,7 @@ def optimize_classifier_params(X, y, n_splits=3, n_trials=50):
             'reg_alpha': trial.suggest_float('reg_alpha', 0.01, 2.0, log=True),
             'reg_lambda': trial.suggest_float('reg_lambda', 0.5, 5.0),
             'scale_pos_weight': trial.suggest_float('scale_pos_weight', 0.7, 1.5),
-            'objective': 'binary:logistic',
-            'eval_metric': 'logloss',
-            'verbosity': 0,
+            'objective': 'binary:logistic', 'eval_metric': 'logloss', 'verbosity': 0,
         }
         da_scores = []
         for train_idx, test_idx in tscv.split(X):
@@ -743,8 +673,7 @@ def optimize_regressor_params(X, y, n_splits=3, n_trials=30):
             'colsample_bytree': trial.suggest_float('colsample_bytree', 0.3, 0.8),
             'reg_alpha': trial.suggest_float('reg_alpha', 0.01, 2.0, log=True),
             'reg_lambda': trial.suggest_float('reg_lambda', 0.5, 5.0),
-            'objective': 'reg:squarederror',
-            'verbosity': 0,
+            'objective': 'reg:squarederror', 'verbosity': 0,
         }
         mae_scores = []
         for train_idx, test_idx in tscv.split(X):
@@ -761,7 +690,9 @@ def optimize_regressor_params(X, y, n_splits=3, n_trials=30):
     return study.best_params
 
 
-### 확률 캘리브레이션 ###
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# [v4 추가] 확률 캘리브레이션
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class ProbabilityCalibrator:
     def __init__(self):
         self.calibrator = IsotonicRegression(out_of_bounds='clip')
@@ -770,7 +701,7 @@ class ProbabilityCalibrator:
 
     def fit(self, raw_probs, y_true):
         if len(raw_probs) < 20:
-            print("  ⚠️ 캘리브레이션 샘플 부족 — 스킵")
+            print("  캘리브레이션 샘플 부족 — 스킵")
             return
         self.calibrator.fit(raw_probs, y_true)
         self.is_fitted = True
@@ -784,11 +715,10 @@ class ProbabilityCalibrator:
 
         bins = [0, 0.05, 0.10, 0.20, 0.30, 0.50, 1.0]
         labels = ['0-5%', '5-10%', '10-20%', '20-30%', '30-50%', '50%+']
-        bin_idx = np.digitize(confidence, bins) - 1
-        bin_idx = np.clip(bin_idx, 0, len(labels) - 1)
+        bin_idx = np.clip(np.digitize(confidence, bins) - 1, 0, len(labels) - 1)
 
         self.confidence_bins = {}
-        print("\n  확신도 구간별 실제 적중률:")
+        print("\n  확신도 구간별 적중률:")
         print(f"  {'구간':>10s} | {'적중률':>8s} | {'샘플수':>6s}")
         print(f"  {'-'*10}-+-{'-'*8}-+-{'-'*6}")
 
@@ -807,7 +737,6 @@ class ProbabilityCalibrator:
                     'accuracy': 0, 'count': 0,
                     'min_conf': bins[i], 'max_conf': bins[i + 1],
                 }
-                print(f"  {label:>10s} | {'N/A':>8s} | {0:>6d}")
 
     def calibrate(self, raw_prob):
         if not self.is_fitted:
@@ -837,7 +766,6 @@ class ProbabilityCalibrator:
             return "관망 (데이터 부족)", confidence, current_bin
 
         actual_acc = current_bin['accuracy']
-
         if actual_acc >= 0.60:
             signal = f"강한 매수 (적중 {actual_acc:.0%})" if direction == "상승" \
                 else f"강한 매도 (적중 {actual_acc:.0%})"
@@ -850,20 +778,16 @@ class ProbabilityCalibrator:
         return signal, confidence, current_bin
 
 
-### 하이브리드 앙상블 ###
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# [v4 변경] 하이브리드 앙상블 모델
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class HybridEnsembleModel:
-
     def __init__(self, clf_params, reg_params):
         self.clf_params = clf_params
         self.reg_params = reg_params
-        self.xgb_clf = None
-        self.lgbm_clf = None
-        self.xgb_reg = None
-        self.lgbm_reg = None
-        self.clf_xgb_weight = 0.5
-        self.clf_lgbm_weight = 0.5
-        self.reg_xgb_weight = 0.5
-        self.reg_lgbm_weight = 0.5
+        self.xgb_clf = self.lgbm_clf = self.xgb_reg = self.lgbm_reg = None
+        self.clf_xgb_weight = self.clf_lgbm_weight = 0.5
+        self.reg_xgb_weight = self.reg_lgbm_weight = 0.5
 
     def _make_lgbm_clf_params(self):
         return {
@@ -875,8 +799,7 @@ class HybridEnsembleModel:
             'reg_alpha': self.clf_params.get('reg_alpha', 0.1),
             'reg_lambda': self.clf_params.get('reg_lambda', 1.5),
             'min_child_weight': self.clf_params.get('min_child_weight', 10),
-            'objective': 'binary',
-            'verbosity': -1,
+            'objective': 'binary', 'verbosity': -1,
         }
 
     def _make_lgbm_reg_params(self):
@@ -889,8 +812,7 @@ class HybridEnsembleModel:
             'reg_alpha': self.reg_params.get('reg_alpha', 0.1),
             'reg_lambda': self.reg_params.get('reg_lambda', 1.5),
             'min_child_weight': self.reg_params.get('min_child_weight', 10),
-            'objective': 'regression',
-            'verbosity': -1,
+            'objective': 'regression', 'verbosity': -1,
         }
 
     def fit(self, X_train, y_cls_train, y_reg_train, X_val=None, y_cls_val=None, y_reg_val=None):
@@ -914,9 +836,7 @@ class HybridEnsembleModel:
             fit_kw_l['callbacks'] = [lgbm.log_evaluation(period=-1)]
         self.lgbm_clf.fit(X_train, y_cls_train, **fit_kw_l)
 
-        xgb_reg_params = {
-            k: v for k, v in self.reg_params.items() if k not in ['verbosity']
-        }
+        xgb_reg_params = {k: v for k, v in self.reg_params.items() if k not in ['verbosity']}
         self.xgb_reg = xgb.XGBRegressor(
             **xgb_reg_params, objective='reg:squarederror', verbosity=0,
         )
@@ -943,8 +863,7 @@ class HybridEnsembleModel:
             blended = w * prob_xgb + (1 - w) * prob_lgbm
             da = accuracy_score(y_cls_val, (blended > 0.5).astype(int))
             if da > best_da:
-                best_da = da
-                best_w = w
+                best_da, best_w = da, w
         self.clf_xgb_weight = best_w
         self.clf_lgbm_weight = 1 - best_w
 
@@ -955,8 +874,7 @@ class HybridEnsembleModel:
             blended = w * pred_xgb + (1 - w) * pred_lgbm
             mae = mean_absolute_error(y_reg_val, blended)
             if mae < best_mae:
-                best_mae = mae
-                best_rw = w
+                best_mae, best_rw = mae, w
         self.reg_xgb_weight = best_rw
         self.reg_lgbm_weight = 1 - best_rw
 
@@ -974,14 +892,10 @@ class HybridEnsembleModel:
         return self.reg_xgb_weight * pred_xgb + self.reg_lgbm_weight * pred_lgbm
 
     def predict(self, X, last_close, calibrator=None):
-        raw_prob = float(self.predict_proba(X)[0])
-        predicted_return = float(self.predict_return(X)[0])
+        raw_prob = float(self.predict_proba(X)[0])          # 분류: 상승 확률
+        predicted_return = float(self.predict_return(X)[0]) # 회귀: 등락 크기
 
-        if calibrator and calibrator.is_fitted:
-            cal_prob = calibrator.calibrate(raw_prob)
-        else:
-            cal_prob = raw_prob
-
+        cal_prob = calibrator.calibrate(raw_prob) if calibrator and calibrator.is_fitted else raw_prob
         direction = int(cal_prob > 0.5)
 
         if direction == 1 and predicted_return < 0:
@@ -1009,7 +923,9 @@ class HybridEnsembleModel:
         }
 
 
-### Walk-Forward CV ###
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# [v4 변경] Walk-Forward CV — 하이브리드
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def walk_forward_cv(X, y_cls, y_reg, clf_params, reg_params, n_splits=5):
     tscv = TimeSeriesSplit(n_splits=n_splits)
     fold_metrics = []
@@ -1017,24 +933,19 @@ def walk_forward_cv(X, y_cls, y_reg, clf_params, reg_params, n_splits=5):
     all_y_true = []
 
     print(f"\n{'='*60}")
-    print(f" Walk-Forward CV ({n_splits} Folds) — 하이브리드 v6.1 + NLP 필터링")
+    print(f" Walk-Forward CV ({n_splits} Folds) — 하이브리드 v4 + NLP")
     print(f"{'='*60}")
-    print(f" 전체 데이터: {len(X)}건 | 피처: {len(X.columns)}개")
 
     sentiment_used = [f for f in X.columns if f in SENTIMENT_FEATURES]
     if sentiment_used:
         print(f" 감성 피처: {sentiment_used}")
-    print(f"{'='*60}\n")
 
     for fold_num, (train_idx, test_idx) in enumerate(tscv.split(X), 1):
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_cls_tr, y_cls_te = y_cls.iloc[train_idx], y_cls.iloc[test_idx]
         y_reg_tr, y_reg_te = y_reg.iloc[train_idx], y_reg.iloc[test_idx]
 
-        print(f"── Fold {fold_num}: train {len(X_train)}건 "
-              f"({X_train.index[0].strftime('%Y-%m-%d')} ~ {X_train.index[-1].strftime('%Y-%m-%d')}) "
-              f"| test {len(X_test)}건 "
-              f"({X_test.index[0].strftime('%Y-%m-%d')} ~ {X_test.index[-1].strftime('%Y-%m-%d')})")
+        print(f"\n── Fold {fold_num}: train {len(X_train)}건 | test {len(X_test)}건")
 
         model = HybridEnsembleModel(clf_params, reg_params)
         model.fit(X_train, y_cls_tr, y_reg_tr, X_test, y_cls_te, y_reg_te)
@@ -1056,12 +967,12 @@ def walk_forward_cv(X, y_cls, y_reg, clf_params, reg_params, n_splits=5):
             "RMSE": round(rmse, 6),
         }
         fold_metrics.append(metrics)
-        print(f"  [Fold {fold_num}] 방향성: {direction_acc:.2%} | MAE: {mae:.6f}")
+        print(f"  방향성: {direction_acc:.2%} | MAE: {mae:.6f}")
 
     # 요약
     summary = {}
     print(f"\n{'='*60}")
-    print(f" Walk-Forward CV 요약")
+    print(f" CV 요약")
     print(f"{'='*60}")
 
     for key in ['Direction_Accuracy', 'MAE', 'RMSE']:
@@ -1076,22 +987,20 @@ def walk_forward_cv(X, y_cls, y_reg, clf_params, reg_params, n_splits=5):
 
     da_values = [m['Direction_Accuracy'] for m in fold_metrics]
     da_spread = max(da_values) - min(da_values)
-    if da_spread > 0.10:
-        print(f"\n  ⚠️  방향성 Fold간 편차: {da_spread:.2%}")
-    else:
-        print(f"\n  ✅ Fold간 편차 안정적: {da_spread:.2%}")
-    print(f"{'='*60}")
+    print(f"  Fold간 스프레드: {da_spread:.2%}")
 
     # 캘리브레이션
-    print(f"\n[캘리브레이션] CV 데이터 {len(all_raw_probs)}건으로 확률 보정 학습...")
+    print(f"\n  [캘리브레이션] {len(all_raw_probs)}건으로 확률 보정 학습...")
     calibrator = ProbabilityCalibrator()
     calibrator.fit(np.array(all_raw_probs), np.array(all_y_true))
 
     return fold_metrics, summary, calibrator
 
 
-### 메인 ###
-def predict_stock_price(user_input, n_splits=5, optuna_trials=50, years=5):
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 메인
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def predict_stock_price(user_input):
     symbol = find_company_symbol(user_input)
     if not symbol:
         return None
@@ -1099,21 +1008,21 @@ def predict_stock_price(user_input, n_splits=5, optuna_trials=50, years=5):
     stock_name = get_korean_name(user_input)
 
     print(f"\n{'#'*60}")
+    print(f"  v4: 하이브리드 + 캘리브레이션 + NLP 감성")
     print(f"  종목: {symbol} ({stock_name})")
-    print(f"  피처 구성: 기술적({len(TECH_FEATURES)}) + 매크로({len(MACRO_FEATURES)})")
-    print(f"           + 대안({len(ALTERNATIVE_FEATURES)}) + 감성NLP({len(SENTIMENT_FEATURES)})")
-    print(f"           + 캘린더({len(CALENDAR_FEATURES)}) = 총 {len(ALL_FEATURES)}개")
-    print(f"  뉴스 필터: 키워드 관련성 + 감성 강도 2단계")
+    print(f"  피처: 기술적({len(TECH_FEATURES)}) + 매크로({len(MACRO_FEATURES)})"
+          f" + 대안({len(ALTERNATIVE_FEATURES)}) + NLP({len(SENTIMENT_FEATURES)})"
+          f" + 캘린더({len(CALENDAR_FEATURES)}) = {len(ALL_FEATURES)}개")
     print(f"{'#'*60}")
 
-    # ① 데이터 준비
+    # [1/6] 데이터 준비
     print("\n[1/6] 데이터 수집 + 뉴스 감성 분석...")
-    df = stock_data(symbol, stock_name, years=years)
+    df = stock_data(symbol, stock_name, years=5)
     X = df[ALL_FEATURES]
     y_cls = df['Target_Direction']
     y_reg = df['Target_Return']
 
-    # ② 피처 선택
+    # [2/6] 피처 선택
     print("\n[2/6] 피처 중요도 분석...")
     split = int(len(X) * 0.7)
     selected_features = select_features_by_importance(
@@ -1123,22 +1032,21 @@ def predict_stock_price(user_input, n_splits=5, optuna_trials=50, years=5):
     )
     X = X[selected_features]
 
-    # ③ Optuna — 분류
-    print(f"\n[3/6] Optuna 분류 모델 튜닝 ({optuna_trials}회)...")
-    clf_params = optimize_classifier_params(X, y_cls, n_splits=3, n_trials=optuna_trials)
+    # [3/6] Optuna 분류
+    print(f"\n[3/6] Optuna 분류 모델 튜닝 (50회)...")
+    clf_params = optimize_classifier_params(X, y_cls, n_splits=3, n_trials=50)
 
-    # ④ Optuna — 회귀
-    reg_trials = max(optuna_trials // 2, 20)
-    print(f"\n[4/6] Optuna 회귀 모델 튜닝 ({reg_trials}회)...")
-    reg_params = optimize_regressor_params(X, y_reg, n_splits=3, n_trials=reg_trials)
+    # [4/6] Optuna 회귀
+    print(f"\n[4/6] Optuna 회귀 모델 튜닝 (25회)...")
+    reg_params = optimize_regressor_params(X, y_reg, n_splits=3, n_trials=25)
 
-    # ⑤ Walk-Forward CV + 캘리브레이션
+    # [5/6] Walk-Forward CV + 캘리브레이션
     print("\n[5/6] Walk-Forward CV + 확률 캘리브레이션...")
     fold_metrics, summary, calibrator = walk_forward_cv(
-        X, y_cls, y_reg, clf_params, reg_params, n_splits=n_splits
+        X, y_cls, y_reg, clf_params, reg_params, n_splits=5,
     )
 
-    # ⑥ 최종 예측
+    # [6/6] 최종 예측
     print("\n[6/6] 최종 모델 학습 & 예측...")
     final_model = HybridEnsembleModel(clf_params, reg_params)
     eval_split = int(len(X) * 0.9)
@@ -1150,21 +1058,7 @@ def predict_stock_price(user_input, n_splits=5, optuna_trials=50, years=5):
     today_features, last_close = compare_data(symbol, stock_name, selected_features)
     result = final_model.predict(today_features, last_close, calibrator)
 
-    print(f"\n{'='*60}")
-    print(f" 최종 예측 결과")
-    print(f"{'='*60}")
-    print(f"  종목:          {symbol} ({stock_name})")
-    print(f"  현재 종가:     {last_close:,.2f}")
-    print(f"  예측 방향:     {result['direction']}")
-    print(f"  Raw 확률:      {result['raw_probability']:.2%}")
-    print(f"  보정 확률:     {result['calibrated_probability']:.2%}")
-    print(f"  확신도:        {result['confidence']:.2%}")
-    print(f"  시그널:        {result['signal']}")
-    print(f"  예측 등락률:   {result['predicted_return']:+.4%}")
-    print(f"  예측 가격:     {result['predicted_price']:,.2f}")
-    print(f"  사용 피처:     {len(selected_features)}개")
-    print(f"  감성 피처:     {[f for f in selected_features if f in SENTIMENT_FEATURES]}")
-    print(f"{'='*60}\n")
+    print_prediction_box(symbol, result, summary)
 
     return {
         "symbol": symbol,
@@ -1178,3 +1072,18 @@ def predict_stock_price(user_input, n_splits=5, optuna_trials=50, years=5):
         "reg_params": reg_params,
         "confidence_bins": calibrator.confidence_bins if calibrator.is_fitted else None,
     }
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 출력 포맷 함수 추가
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def print_prediction_box(symbol, result, summary):
+    line = "=" * 46
+
+    print("\n" + line)
+    print(symbol)
+    print(line)
+    print(f"등락률:   {result['predicted_return']:+.4%}")
+    print(f"방향:     {result['direction']}")
+    print(f"방향성:   {summary['Direction_Accuracy']['mean']:.2%} ± {summary['Direction_Accuracy']['std']:.2%}")
+    print(f"MAE:      {summary['MAE']['mean']:.6f}")
+    print(line + "\n")

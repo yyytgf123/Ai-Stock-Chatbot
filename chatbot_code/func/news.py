@@ -16,3 +16,4 @@ def get_news(keyword="경제"):
             "date": item.pubDate.text
         })
     return articles
+
