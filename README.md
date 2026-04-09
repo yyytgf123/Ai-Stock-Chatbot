@@ -13,9 +13,9 @@
 
 <h2>🧠 Project Overview</h2>
 
-* 본 프로젝트는 AWS Bedrock과 SageMaker를 활용한 AI 기반 주식 예측 시스템
+* 본 프로젝트는 AWS Bedrock과 AI 모델을 활용한 AI 기반 주식 예측 시스템
 
-* Yahoo Finance 및 Yahooquery API를 통해 실시간 주식 데이터를 수집하고, SageMaker(XGBoost 모델)로 미래 주가를 예측
+* Yahoo Finance 및 Yahooquery API를 통해 실시간 주식 데이터를 수집하고, XGBoost 모델로 미래 주가를 예측
 
 * 주가 예측 이외에 일반 평문, 주식 관련 정보(주가, 회사 분석, 뉴스)를 제공
  
